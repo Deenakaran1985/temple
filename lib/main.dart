@@ -56,8 +56,8 @@ class _RootPageState extends State<RootPage> {
     AlarmLink? link;
     if (cfg.isValid) {
       link = AlarmLink(cfg);
-      // Android: the background service notifies. macOS: the app itself does.
-      if (Platform.isMacOS) link.onEvent = Notifier.handleEvent;
+      // Android: the background service notifies. iOS / macOS: the app itself does.
+      if (Platform.isMacOS || Platform.isIOS) link.onEvent = Notifier.handleEvent;
       link.connect();
     }
     setState(() {

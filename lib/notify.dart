@@ -24,16 +24,19 @@ class Notifier {
     importance: Importance.low,
   );
 
+  static const _darwinInit = DarwinInitializationSettings(
+    requestAlertPermission: false,
+    requestBadgePermission: false,
+    requestSoundPermission: false,
+  );
+
   static Future<void> init() async {
     if (_ready) return;
     await _plugin.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-        macOS: DarwinInitializationSettings(
-          requestAlertPermission: false,
-          requestBadgePermission: false,
-          requestSoundPermission: false,
-        ),
+        iOS: _darwinInit,
+        macOS: _darwinInit,
       ),
     );
     final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
@@ -43,7 +46,7 @@ class Notifier {
     _ready = true;
   }
 
-  /// Ask once, from the UI (Android 13+ and macOS need the user's consent).
+  /// Ask once, from the UI (Android 13+, iOS and macOS need the user's consent).
   static Future<void> requestPermission() async {
     if (Platform.isAndroid) {
       await _plugin
@@ -52,6 +55,10 @@ class Notifier {
     } else if (Platform.isMacOS) {
       await _plugin
           .resolvePlatformSpecificImplementation<MacOSFlutterLocalNotificationsPlugin>()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
+    } else if (Platform.isIOS) {
+      await _plugin
+          .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
           ?.requestPermissions(alert: true, badge: true, sound: true);
     }
   }
@@ -72,6 +79,10 @@ class Notifier {
     final isAlarm = e['type'] == 'alarm';
     final ch = isAlarm ? alarmChannel : infoChannel;
     await init();
+    final darwin = DarwinNotificationDetails(
+      presentSound: true,
+      interruptionLevel: isAlarm ? InterruptionLevel.timeSensitive : InterruptionLevel.active,
+    );
     await _plugin.show(
       id: id.hashCode & 0x7fffffff,
       title: isAlarm ? 'ALARM – Temple Alarm' : 'Temple Alarm',
@@ -85,10 +96,8 @@ class Notifier {
           category: isAlarm ? AndroidNotificationCategory.alarm : AndroidNotificationCategory.status,
           ticker: e['msg']?.toString(),
         ),
-        macOS: DarwinNotificationDetails(
-          presentSound: true,
-          interruptionLevel: isAlarm ? InterruptionLevel.timeSensitive : InterruptionLevel.active,
-        ),
+        iOS: darwin,
+        macOS: darwin,
       ),
     );
   }
