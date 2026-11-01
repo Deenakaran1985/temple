@@ -37,7 +37,7 @@
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="specialUse"
             android:exported="false"
-            tools:replace="android:foregroundServiceType">
+            tools:replace="android:foregroundServiceType,android:exported">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Security alarm monitoring: keeps a connection open to show burglar alarm alerts"/>
