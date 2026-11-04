@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' show Color;
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -34,7 +35,7 @@ class Notifier {
     if (_ready) return;
     await _plugin.initialize(
       settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        android: AndroidInitializationSettings('@drawable/ic_notification'),
         iOS: _darwinInit,
         macOS: _darwinInit,
       ),
@@ -95,6 +96,7 @@ class Notifier {
           priority: isAlarm ? Priority.max : Priority.defaultPriority,
           category: isAlarm ? AndroidNotificationCategory.alarm : AndroidNotificationCategory.status,
           ticker: e['msg']?.toString(),
+          color: const Color(0xFFD97706),
         ),
         iOS: darwin,
         macOS: darwin,

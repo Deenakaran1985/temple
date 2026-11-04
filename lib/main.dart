@@ -78,7 +78,9 @@ class _RootPageState extends State<RootPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_loading) {
+      return Scaffold(body: Center(child: Image.asset('assets/logo.png', width: 120, height: 120)));
+    }
     final link = _link;
     if (link == null) return SettingsPage(firstRun: true, onSaved: _start);
     return HomePage(link: link, onSettings: _openSettings);
@@ -101,6 +103,10 @@ class HomePage extends StatelessWidget {
         final s = link.status;
         return Scaffold(
           appBar: AppBar(
+            leading: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Image.asset('assets/logo.png'),
+            ),
             title: Text(link.cfg.deviceId),
             actions: [
               _ConnChip(link: link),
@@ -481,6 +487,12 @@ class _SettingsPageState extends State<SettingsPage> {
       body: Form(
         key: _form,
         child: ListView(padding: const EdgeInsets.all(16), children: [
+          if (widget.firstRun) ...[
+            Center(child: Image.asset('assets/logo.png', width: 96, height: 96)),
+            const SizedBox(height: 8),
+            Center(child: Text('Temple Alarm', style: Theme.of(context).textTheme.titleLarge)),
+            const SizedBox(height: 16),
+          ],
           const Text('Use the same broker details you entered on the device web page '
               '(Settings → Mobile App). The Device ID is shown on the device login page.'),
           const SizedBox(height: 16),
