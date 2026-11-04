@@ -31,6 +31,15 @@ class AppConfig {
     );
   }
 
+  /// The device ID the user last logged in to (cleared on logout).
+  static Future<String?> loggedInDevice() async =>
+      (await SharedPreferences.getInstance()).getString('loggedInDevice');
+
+  static Future<void> setLoggedIn(String? deviceId) async {
+    final p = await SharedPreferences.getInstance();
+    deviceId == null ? await p.remove('loggedInDevice') : await p.setString('loggedInDevice', deviceId);
+  }
+
   Future<void> save() async {
     final p = await SharedPreferences.getInstance();
     await p.setString('host', host.trim());

@@ -42,6 +42,7 @@ class RootPage extends StatefulWidget {
 class _RootPageState extends State<RootPage> {
   AlarmLink? _link;
   bool _loading = true;
+  bool _loggedIn = false;
 
   @override
   void initState() {
@@ -60,10 +61,23 @@ class _RootPageState extends State<RootPage> {
       if (Platform.isMacOS || Platform.isIOS) link.onEvent = Notifier.handleEvent;
       link.connect();
     }
+    // A login only counts for the device it was made to
+    final loggedIn = cfg.isValid && await AppConfig.loggedInDevice() == cfg.deviceId;
     setState(() {
       _link = link;
+      _loggedIn = loggedIn;
       _loading = false;
     });
+  }
+
+  Future<void> _onLoggedIn() async {
+    await AppConfig.setLoggedIn(_link!.cfg.deviceId);
+    setState(() => _loggedIn = true);
+  }
+
+  Future<void> _logout() async {
+    await AppConfig.setLoggedIn(null);
+    setState(() => _loggedIn = false);
   }
 
   Future<void> _openSettings() async {
@@ -83,7 +97,112 @@ class _RootPageState extends State<RootPage> {
     }
     final link = _link;
     if (link == null) return SettingsPage(firstRun: true, onSaved: _start);
-    return HomePage(link: link, onSettings: _openSettings);
+    if (!_loggedIn) return LoginPage(link: link, onLoggedIn: _onLoggedIn, onSettings: _openSettings);
+    return HomePage(link: link, onSettings: _openSettings, onLogout: _logout);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Login: same username / password as the device web page,
+//  checked by the device itself once it is reachable
+// ─────────────────────────────────────────────────────────────
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key, required this.link, required this.onLoggedIn, required this.onSettings});
+  final AlarmLink link;
+  final VoidCallback onLoggedIn;
+  final VoidCallback onSettings;
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final _form = GlobalKey<FormState>();
+  final _user = TextEditingController(text: 'admin');
+  final _pass = TextEditingController();
+  bool _busy = false, _hide = true;
+  String? _error;
+
+  Future<void> _login() async {
+    if (!_form.currentState!.validate()) return;
+    setState(() { _busy = true; _error = null; });
+    final ok = await widget.link.login(_user.text.trim(), _pass.text);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = switch (ok) {
+        true => null,
+        false => 'Wrong username or password',
+        null => 'No reply from the device – check it is online and try again',
+      };
+    });
+    if (ok == true) widget.onLoggedIn();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.link,
+      builder: (context, _) {
+        final link = widget.link;
+        final ready = link.connected && link.deviceOnline;
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Login'),
+            actions: [
+              _ConnChip(link: link),
+              IconButton(icon: const Icon(Icons.settings), tooltip: 'Settings', onPressed: widget.onSettings),
+            ],
+          ),
+          body: Form(
+            key: _form,
+            child: ListView(padding: const EdgeInsets.all(24), children: [
+              Center(child: Image.asset('assets/logo.png', width: 96, height: 96)),
+              const SizedBox(height: 8),
+              Center(child: Text('Temple Alarm', style: Theme.of(context).textTheme.titleLarge)),
+              Center(child: Text(link.cfg.deviceId, style: Theme.of(context).textTheme.bodySmall)),
+              const SizedBox(height: 24),
+              TextFormField(
+                controller: _user,
+                autocorrect: false,
+                textInputAction: TextInputAction.next,
+                validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
+                decoration: const InputDecoration(labelText: 'Username', prefixIcon: Icon(Icons.person)),
+              ),
+              TextFormField(
+                controller: _pass,
+                obscureText: _hide,
+                textInputAction: TextInputAction.done,
+                onFieldSubmitted: (_) => _busy || !ready ? null : _login(),
+                validator: (v) => (v ?? '').isEmpty ? 'Required' : null,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  prefixIcon: const Icon(Icons.lock),
+                  suffixIcon: IconButton(
+                    icon: Icon(_hide ? Icons.visibility : Icons.visibility_off),
+                    onPressed: () => setState(() => _hide = !_hide),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text('Use the login of the device web page (default: admin / admin123).',
+                  style: Theme.of(context).textTheme.bodySmall),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              ],
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: _busy || !ready ? null : _login,
+                icon: _busy
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.login),
+                label: Text(ready ? 'Login' : 'Waiting for device…'),
+              ),
+            ]),
+          ),
+        );
+      },
+    );
   }
 }
 
@@ -91,9 +210,10 @@ class _RootPageState extends State<RootPage> {
 //  Home: status, controls, zones, remote, audio, events
 // ─────────────────────────────────────────────────────────────
 class HomePage extends StatelessWidget {
-  const HomePage({super.key, required this.link, required this.onSettings});
+  const HomePage({super.key, required this.link, required this.onSettings, required this.onLogout});
   final AlarmLink link;
   final VoidCallback onSettings;
+  final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
@@ -111,6 +231,7 @@ class HomePage extends StatelessWidget {
             actions: [
               _ConnChip(link: link),
               IconButton(icon: const Icon(Icons.settings), tooltip: 'Settings', onPressed: onSettings),
+              IconButton(icon: const Icon(Icons.logout), tooltip: 'Logout', onPressed: onLogout),
             ],
           ),
           body: RefreshIndicator(
@@ -504,8 +625,8 @@ class _SettingsPageState extends State<SettingsPage> {
           TextFormField(controller: _port, keyboardType: TextInputType.number,
               validator: (v) => int.tryParse(v ?? '') == null ? 'Number' : null,
               decoration: const InputDecoration(labelText: 'Port (8883 = TLS)')),
-          TextFormField(controller: _user, decoration: const InputDecoration(labelText: 'Username')),
-          TextFormField(controller: _pass, obscureText: true, decoration: const InputDecoration(labelText: 'Password')),
+          TextFormField(controller: _user, decoration: const InputDecoration(labelText: 'Broker username')),
+          TextFormField(controller: _pass, obscureText: true, decoration: const InputDecoration(labelText: 'Broker password')),
           const SizedBox(height: 24),
           FilledButton(onPressed: _save, child: const Text('Save & connect')),
         ]),

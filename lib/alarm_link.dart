@@ -31,6 +31,8 @@ class AlarmLink extends ChangeNotifier {
   /// Called for every event message (new or retained); the notifier de-duplicates.
   void Function(Map<String, dynamic> event)? onEvent;
 
+  final Map<String, Completer<bool>> _logins = {};
+
   bool get connected => connection == 'connected';
   String get _base => cfg.topicBase;
 
@@ -98,6 +100,11 @@ class AlarmLink extends ChangeNotifier {
           }
           onEvent?.call(e);
         } catch (_) {}
+      } else if (topic == 'ack') {
+        try {
+          final a = jsonDecode(text) as Map<String, dynamic>;
+          if (a['cmd'] == 'login') _logins.remove(a['req'])?.complete(a['ok'] == true);
+        } catch (_) {}
       }
     }
     notifyListeners();
@@ -105,11 +112,30 @@ class AlarmLink extends ChangeNotifier {
 
   /// Sends a command such as arm, disarm, panic, stop_alarm, mute,
   /// volume(value), play(value), pair_zone(value), pair_next, unpair_zone(value), pair_remote.
-  bool send(String cmd, [int? value]) {
+  bool send(String cmd, [int? value]) => _publish({'cmd': cmd, 'value': ?value});
+
+  /// Checks the device's web login (username + password) over MQTT.
+  /// Returns true / false from the device, or null if it did not answer.
+  Future<bool?> login(String user, String pass) async {
+    final req = '${DateTime.now().microsecondsSinceEpoch}';
+    final done = Completer<bool>();
+    _logins[req] = done;
+    if (!_publish({'cmd': 'login', 'user': user, 'pass': pass, 'req': req})) {
+      _logins.remove(req);
+      return null;
+    }
+    try {
+      return await done.future.timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      _logins.remove(req);
+      return null;
+    }
+  }
+
+  bool _publish(Map<String, dynamic> msg) {
     final c = _client;
     if (c == null || !connected) return false;
-    final b = MqttClientPayloadBuilder()
-      ..addString(jsonEncode({'cmd': cmd, 'value': ?value}));
+    final b = MqttClientPayloadBuilder()..addString(jsonEncode(msg));
     c.publishMessage('$_base/cmd', MqttQos.atLeastOnce, b.payload!);
     return true;
   }
