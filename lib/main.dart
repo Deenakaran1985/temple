@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'alarm_link.dart';
 import 'background.dart';
 import 'config.dart';
+import 'discovery.dart';
 import 'notify.dart';
 
 Future<void> main() async {
@@ -90,32 +91,39 @@ class _RootPageState extends State<RootPage> {
     }
   }
 
+  Future<void> _setupDone() async {
+    await AlertService.reload();
+    await _start();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return Scaffold(body: Center(child: Image.asset('assets/logo.png', width: 120, height: 120)));
     }
     final link = _link;
-    if (link == null) return SettingsPage(firstRun: true, onSaved: _start);
+    if (link == null) return SetupPage(onDone: _setupDone);
     if (!_loggedIn) return LoginPage(link: link, onLoggedIn: _onLoggedIn, onSettings: _openSettings);
     return HomePage(link: link, onSettings: _openSettings, onLogout: _logout);
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Login: same username / password as the device web page,
-//  checked by the device itself once it is reachable
+//  Login form shared by the WiFi setup and the remote login.
+//  Same username / password as the device web page.
 // ─────────────────────────────────────────────────────────────
-class LoginPage extends StatefulWidget {
-  const LoginPage({super.key, required this.link, required this.onLoggedIn, required this.onSettings});
-  final AlarmLink link;
-  final VoidCallback onLoggedIn;
-  final VoidCallback onSettings;
+class _LoginForm extends StatefulWidget {
+  const _LoginForm({required this.subtitle, required this.ready, required this.notReadyLabel, required this.onLogin});
+  final String subtitle;
+  final bool ready;
+  final String notReadyLabel;
+  /// Returns null on success, otherwise the error to show.
+  final Future<String?> Function(String user, String pass) onLogin;
   @override
-  State<LoginPage> createState() => _LoginPageState();
+  State<_LoginForm> createState() => _LoginFormState();
 }
 
-class _LoginPageState extends State<LoginPage> {
+class _LoginFormState extends State<_LoginForm> {
   final _form = GlobalKey<FormState>();
   final _user = TextEditingController(text: 'admin');
   final _pass = TextEditingController();
@@ -123,85 +131,252 @@ class _LoginPageState extends State<LoginPage> {
   String? _error;
 
   Future<void> _login() async {
-    if (!_form.currentState!.validate()) return;
+    if (_busy || !widget.ready || !_form.currentState!.validate()) return;
     setState(() { _busy = true; _error = null; });
-    final ok = await widget.link.login(_user.text.trim(), _pass.text);
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _error = switch (ok) {
-        true => null,
-        false => 'Wrong username or password',
-        null => 'No reply from the device – check it is online and try again',
-      };
-    });
-    if (ok == true) widget.onLoggedIn();
+    final err = await widget.onLogin(_user.text.trim(), _pass.text);
+    if (mounted) setState(() { _busy = false; _error = err; });
   }
 
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return Form(
+      key: _form,
+      child: ListView(padding: const EdgeInsets.all(24), children: [
+        Center(child: Image.asset('assets/logo.png', width: 96, height: 96)),
+        const SizedBox(height: 8),
+        Center(child: Text('Temple Alarm', style: t.titleLarge)),
+        Center(child: Text(widget.subtitle, style: t.bodySmall)),
+        const SizedBox(height: 24),
+        TextFormField(
+          controller: _user,
+          autocorrect: false,
+          textInputAction: TextInputAction.next,
+          validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
+          decoration: const InputDecoration(labelText: 'Username', prefixIcon: Icon(Icons.person)),
+        ),
+        TextFormField(
+          controller: _pass,
+          obscureText: _hide,
+          textInputAction: TextInputAction.done,
+          onFieldSubmitted: (_) => _login(),
+          validator: (v) => (v ?? '').isEmpty ? 'Required' : null,
+          decoration: InputDecoration(
+            labelText: 'Password',
+            prefixIcon: const Icon(Icons.lock),
+            suffixIcon: IconButton(
+              icon: Icon(_hide ? Icons.visibility : Icons.visibility_off),
+              onPressed: () => setState(() => _hide = !_hide),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text('Use the login of the device web page (default: admin / admin123).', style: t.bodySmall),
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        ],
+        const SizedBox(height: 24),
+        FilledButton.icon(
+          onPressed: _busy || !widget.ready ? null : _login,
+          icon: _busy
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.login),
+          label: Text(widget.ready ? 'Login' : widget.notReadyLabel),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Remote login over MQTT, once the app already knows the device.
+class LoginPage extends StatelessWidget {
+  const LoginPage({super.key, required this.link, required this.onLoggedIn, required this.onSettings});
+  final AlarmLink link;
+  final VoidCallback onLoggedIn;
+  final VoidCallback onSettings;
+
+  @override
+  Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: widget.link,
-      builder: (context, _) {
-        final link = widget.link;
-        final ready = link.connected && link.deviceOnline;
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Login'),
-            actions: [
-              _ConnChip(link: link),
-              IconButton(icon: const Icon(Icons.settings), tooltip: 'Settings', onPressed: widget.onSettings),
-            ],
-          ),
-          body: Form(
-            key: _form,
-            child: ListView(padding: const EdgeInsets.all(24), children: [
-              Center(child: Image.asset('assets/logo.png', width: 96, height: 96)),
-              const SizedBox(height: 8),
-              Center(child: Text('Temple Alarm', style: Theme.of(context).textTheme.titleLarge)),
-              Center(child: Text(link.cfg.deviceId, style: Theme.of(context).textTheme.bodySmall)),
-              const SizedBox(height: 24),
-              TextFormField(
-                controller: _user,
-                autocorrect: false,
-                textInputAction: TextInputAction.next,
-                validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
-                decoration: const InputDecoration(labelText: 'Username', prefixIcon: Icon(Icons.person)),
+      listenable: link,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(
+          title: const Text('Login'),
+          actions: [
+            _ConnChip(link: link),
+            IconButton(icon: const Icon(Icons.settings), tooltip: 'Settings', onPressed: onSettings),
+          ],
+        ),
+        body: _LoginForm(
+          subtitle: link.cfg.deviceId,
+          ready: link.connected && link.deviceOnline,
+          notReadyLabel: 'Waiting for device…',
+          onLogin: (user, pass) async {
+            final ok = await link.login(user, pass);
+            if (ok == true) onLoggedIn();
+            return switch (ok) {
+              true => null,
+              false => 'Wrong username or password',
+              null => 'No reply from the device – check it is online and try again',
+            };
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Setup: find the alarm on the phone's WiFi, log in, and fetch
+//  the Device ID + cloud (broker) details from the device itself
+// ─────────────────────────────────────────────────────────────
+class SetupPage extends StatefulWidget {
+  /// Called after a successful setup; when null the page pops with true.
+  const SetupPage({super.key, this.onDone});
+  final VoidCallback? onDone;
+  @override
+  State<SetupPage> createState() => _SetupPageState();
+}
+
+class _SetupPageState extends State<SetupPage> {
+  final _finder = DeviceFinder();
+
+  @override
+  void initState() {
+    super.initState();
+    _finder.search();
+  }
+
+  @override
+  void dispose() {
+    _finder.dispose();
+    super.dispose();
+  }
+
+  void _finish() {
+    if (widget.onDone != null) {
+      widget.onDone!();
+    } else {
+      Navigator.pop(context, true);
+    }
+  }
+
+  Future<void> _open(FoundDevice dev) async {
+    await _finder.stop();
+    if (!mounted) return;
+    final ok = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => DeviceLoginPage(device: dev)),
+    );
+    if (ok == true) _finish();
+  }
+
+  Future<void> _enterIp() async {
+    final ctl = TextEditingController(text: '192.168.');
+    final ip = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Device IP address'),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(helperText: "Shown on the alarm's LCD screen"),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text.trim()), child: const Text('Connect')),
+        ],
+      ),
+    );
+    if (ip == null || ip.isEmpty || !mounted) return;
+    final dev = await DeviceFinder.probe(ip);
+    if (!mounted) return;
+    if (dev == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No Temple Alarm found at $ip')));
+    } else {
+      _open(dev);
+    }
+  }
+
+  Future<void> _manual() async {
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const SettingsPage(fromSetup: true)),
+    );
+    if (saved == true) _finish();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Find your alarm')),
+      body: ListenableBuilder(
+        listenable: _finder,
+        builder: (context, _) => ListView(padding: const EdgeInsets.all(16), children: [
+          Center(child: Image.asset('assets/logo.png', width: 80, height: 80)),
+          const SizedBox(height: 12),
+          const Text('Connect this phone to the same WiFi as the alarm. '
+              'If the alarm is not on a WiFi yet, connect to its own hotspot '
+              '(named like TALM-XXXXXX, password 12345678) and turn off mobile data.'),
+          const SizedBox(height: 16),
+          Row(children: [
+            Text('Alarms found', style: t.titleMedium),
+            const Spacer(),
+            if (_finder.searching)
+              const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+            else
+              TextButton.icon(onPressed: _finder.search, icon: const Icon(Icons.refresh), label: const Text('Search again')),
+          ]),
+          if (_finder.devices.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                child: Text(_finder.searching ? 'Searching the WiFi…' : 'No alarm found on this WiFi',
+                    style: t.bodyMedium),
               ),
-              TextFormField(
-                controller: _pass,
-                obscureText: _hide,
-                textInputAction: TextInputAction.done,
-                onFieldSubmitted: (_) => _busy || !ready ? null : _login(),
-                validator: (v) => (v ?? '').isEmpty ? 'Required' : null,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  prefixIcon: const Icon(Icons.lock),
-                  suffixIcon: IconButton(
-                    icon: Icon(_hide ? Icons.visibility : Icons.visibility_off),
-                    onPressed: () => setState(() => _hide = !_hide),
-                  ),
-                ),
+            ),
+          for (final d in _finder.devices)
+            Card(
+              child: ListTile(
+                leading: Image.asset('assets/logo.png', width: 40, height: 40),
+                title: Text(d.id),
+                subtitle: Text(d.ip),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _open(d),
               ),
-              const SizedBox(height: 8),
-              Text('Use the login of the device web page (default: admin / admin123).',
-                  style: Theme.of(context).textTheme.bodySmall),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-              ],
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: _busy || !ready ? null : _login,
-                icon: _busy
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.login),
-                label: Text(ready ? 'Login' : 'Waiting for device…'),
-              ),
-            ]),
-          ),
-        );
-      },
+            ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(onPressed: _enterIp, icon: const Icon(Icons.edit), label: const Text('Enter IP address')),
+          TextButton(onPressed: _manual, child: const Text('Advanced: enter cloud details manually')),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Logs in to a device found on the WiFi; pops with true once set up.
+class DeviceLoginPage extends StatelessWidget {
+  const DeviceLoginPage({super.key, required this.device});
+  final FoundDevice device;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Login')),
+      body: _LoginForm(
+        subtitle: '${device.id} · ${device.ip}',
+        ready: true,
+        notReadyLabel: '',
+        onLogin: (user, pass) async {
+          final err = await setupFromDevice(device.ip, user, pass);
+          if (err == null && context.mounted) Navigator.pop(context, true);
+          return err;
+        },
+      ),
     );
   }
 }
@@ -555,9 +730,9 @@ class _NetworkCard extends StatelessWidget {
 //  Settings: broker + device ID (same values as the device web page)
 // ─────────────────────────────────────────────────────────────
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, this.firstRun = false, this.onSaved});
-  final bool firstRun;
-  final VoidCallback? onSaved;
+  const SettingsPage({super.key, this.fromSetup = false});
+  /// Opened from the WiFi search page, so don't offer the search again.
+  final bool fromSetup;
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
@@ -591,30 +766,33 @@ class _SettingsPageState extends State<SettingsPage> {
       pass: _pass.text,
       deviceId: _dev.text,
     ).save();
-    if (!mounted) return;
-    if (widget.firstRun) {
-      await AlertService.reload();
-      widget.onSaved?.call();
-    } else {
-      Navigator.pop(context, true);
-    }
+    if (mounted) Navigator.pop(context, true);
+  }
+
+  Future<void> _search() async {
+    final found = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => const SetupPage()));
+    if (found == true && mounted) Navigator.pop(context, true);
   }
 
   @override
   Widget build(BuildContext context) {
     String? req(String? v) => (v == null || v.trim().isEmpty) ? 'Required' : null;
     return Scaffold(
-      appBar: AppBar(title: Text(widget.firstRun ? 'Connect to your alarm' : 'Settings')),
+      appBar: AppBar(title: Text(widget.fromSetup ? 'Cloud details' : 'Settings')),
       body: Form(
         key: _form,
         child: ListView(padding: const EdgeInsets.all(16), children: [
-          if (widget.firstRun) ...[
-            Center(child: Image.asset('assets/logo.png', width: 96, height: 96)),
+          if (!widget.fromSetup) ...[
+            FilledButton.icon(
+              onPressed: _search,
+              icon: const Icon(Icons.wifi_find),
+              label: const Text('Search WiFi for my alarm'),
+            ),
             const SizedBox(height: 8),
-            Center(child: Text('Temple Alarm', style: Theme.of(context).textTheme.titleLarge)),
-            const SizedBox(height: 16),
+            const Text('Easiest: the app finds the alarm on your WiFi and copies these details from it.'),
+            const Divider(height: 32),
           ],
-          const Text('Use the same broker details you entered on the device web page '
+          const Text('Advanced: the same broker details as on the device web page '
               '(Settings → Mobile App). The Device ID is shown on the device login page.'),
           const SizedBox(height: 16),
           TextFormField(controller: _dev, validator: req,
